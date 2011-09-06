@@ -60,21 +60,32 @@ A fully complete Pynchon Gate implementation will have these pieces:
 
 
 
-Right now, the only part that's implemented is the distributor code.
-It's called "Inverarity".  It aims to be really fast, since the
+Right now, the only parts that are implemented are the distributor
+code and the collator code.
+
+
+The distributor is called "Inverarity".  It aims to be really fast, since the
 distributors are likely to be the performance bottleneck of the whole
 system.
-
 
 See src/inverarity/README for more information about its status and
 how to try it out.
 
 
-The next parts I'd like to work on are a quick-and-dirty collator,
-tentatively to be called "Maas"; the stub of a client, tentatively to
-be called "Prentice" or "Pointsman" or something; and the more
-crypto-heavy part of a nymserver, possibly to be named "Stencil" or
-"V."  or "Cherdlu".
+The collator is called "Maas".  It's written in python and totally
+untested at the moment.
+
+See src/maas/README for more information about its status and
+how to try it out.
+
+
+
+
+
+The next parts I'd like to work on are the stub of a client,
+tentatively to be called "Prentice" or "Pointsman" or something; and
+the more crypto-heavy part of a nymserver, possibly to be named
+"Stencil" or "V."  or "Cherdlu".
 
 
 I'm aiming for the server parts to be clean and fast first; portable

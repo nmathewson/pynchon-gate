@@ -1,0 +1,50 @@
+Maas differs from the format described in section 3.2 of pynchon-spec.txt
+
+Here, the formats are:
+
+   Metadata:
+         Version: 4 bytes
+         Bucket size: 4 bytes.
+         Nymserver name: HASH_LEN*2 bytes.
+           (Meant to be human readable.)
+         Nymserver identity: HASH_LEN bytes.
+           (Hash of nymserver public key)
+         File name: HASH_LEN*2 bytes.
+           (Name of the "file" that this distribution was meant to hold.
+            This is meant to replace the idea of numbering cycles.)
+         Distribution digest: HASH_LEN bytes
+           (Digest of the entire distribution file.)
+         Number of entries in the metaindex==MLEN: 4 bytes
+         Metaindex: MLen * (HASH_LEN*2) bytes
+           (A bunch of metainfo entries, described below)
+         SigLen: 4 bytes
+         Signature: SigLen bytes
+
+   The protocol version for this version of the spec is 0.
+
+   Signature is an RSA signature of the hash of the metadata up through
+   "metaindex", using RSASSA_PSS padding (because that's what I could make
+   m2crypto support).
+
+   Metaindex entry
+
+      UID    First UserID in index bucket [HASH_LEN octets]
+      IDX_H  Hash of index bucket         [HASH_LEN octets]
+
+   Index entry
+
+      UID    UserID                               [HASH_LEN octets]
+      M_IDX  Index of user's first message bucket [4 octets]
+      M_OFF  Offset of the user's first message within the user's first
+             bucket (always 0 for now)            [4 octets]
+      M_H    Hash of user's first message bucket  [HASH_LEN octets]
+
+   Message bucket
+
+      H      Hash of next message bucket          [HASH_LEN octets]
+      DATA   Packaged message data                [BlockSize-HASH_LEN octets]
+
+
+Anything that doesn't fill up a bucket is padded with 0-bytes.
+
+See README for info on how userids are generated for now.

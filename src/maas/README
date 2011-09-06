@@ -1,0 +1,28 @@
+Here's "Maas", a trivial Pynchon Gate collator written in Python.
+
+Maas is COMPLETELY UNTESTED, and is probably broken in lots of ways.
+
+Maas requires M2Crypto, since that's the only python crypto lib I
+could find that let me read PEM-encoded RSA private keys and sign
+things with them.
+
+Maas takes as input a private RSA key file and a directory:
+
+     maas.py key.pem directory
+
+It generates two new files, "my-dist.meta" and "my-dist.bs8192", to
+contain all the files in the directory.
+
+Maas does not follow pynchon-spec.txt exactly; see spec-changes.txt
+for information.
+
+Maas is COMPLETELY UNTESTED, and is probably broken in lots of ways.
+
+It doesn't do the work of managing userIDs over time: instead, it
+requires that every user's data be stored in one file in the directory
+you give it.  Either you can specify the userID by making the file's
+name a 64-byte hex string (corresponding to a 32-byte userID); or maas
+will set the userID to a SHA256 hash of the filename.
+
+Maas is COMPLETELY UNTESTED, and is probably broken in lots of ways.
+
