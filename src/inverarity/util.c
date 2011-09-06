@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <netinet/in.h>
 
 #include "util.h"
 #include "logging.h"
