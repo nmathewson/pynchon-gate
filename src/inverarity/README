@@ -70,6 +70,12 @@ Here's how to do it.
      tls_secret_key : A secret key for tls_cert, in PEM form.  You need
      to generate this yourself.  It can be encrypted.
 
+     You can generate tls_secret_key and tls_cert using openssl as follows:
+
+       openssl genrsa -aes256 -out tls_secret_key
+       openssl req -new -key tls_secret_key -out distributor.csr
+       openssl x509 -req -days 365 -in distributor.csr -signkey tls_secret_key -out tls_cert
+
 4. Start inverarity.  The syntax is:
 
       ./inverarity DIR ADDRESS PORT
