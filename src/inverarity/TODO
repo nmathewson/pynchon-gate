@@ -1,0 +1,28 @@
+BEFORE WE COULD DEPLOY IT FOR HAXXORS TO USE FOR THEIR MAIL
+- testing
+  - needs unit tests
+  - needs integration tests
+  - needs coverage
+- start revised pynchon-spec.txt
+- Needs specification
+  - offline master-key logic: have the real key be one that signs cert
+  - make the protocol versioned
+  - sign responses
+  - shift to decent set of ciphers
+  - Implement logic to serve a meta-index, list of distributions, etc.
+- Performance/resource-management
+  - Cork the SSL: don't do lots of little writes.
+  - make an mmap-less distributor implementation
+  - read timeouts and write timeouts
+  - block conns that have more than X pending requests
+  - rate-limiting
+- Functionality
+  - write logging for real
+
+LATER:
+- parallelize openssl bases
+- have option of more than one thread per distributor
+- nagel responses
+- deal with byzantine peers
+- one-block requests
+- PRNG-requests

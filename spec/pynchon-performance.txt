@@ -1,0 +1,152 @@
+   N -- number of users
+   S -- number of distributors
+   K -- security parameter for PIR.
+   B -- bucket size
+   Vol[i] -- Volume of message received on a given "day" by user i.
+   CVol -- Volume of messages received on a given "day" by user i,
+       after compression.
+   MCVol[i] -- Maximum compressed volume that user i can receive in
+        one "day".
+   W -- Window in which users must retrieve their messages (in "days").
+
+   ME -- metaindex entry size (36 bytes)
+   IE -- index entry size (40 bytes)
+   SS -- stream seed size (32 bytes)
+
+   Number of message buckets needed (m):
+     SUM( CEIL( CVol[i] / B ) )
+
+   Number of index buckets needed (I):
+
+     CEIL( (N * IE) / (B-IE) )
+
+   Size of metaindex (MS):
+
+     ME * I
+
+   Total storage needed per pool (PS):
+
+     B * (m+I) + MS
+
+   Storage needed at each distributer:
+
+     PS * W
+
+   Bandwidth of nymserver/collator per "day" (assuming idealized
+      Bittorrent):
+
+     SUM(Vol[i]) + PS
+
+     (I'm assuming an idealized Bittorrent where every participant has
+     equal bandwidth; where everybody but the original seed downloads
+     the entire file once; where everybody uploads the entire file
+     once; and where tracker bandwidth is negligible.)
+
+   Client bandwidth per "day":
+
+     User i needs to fetch
+         CEIL( MCVol[i] / B ) + 1
+     buckets per day.  Call this Buckets[i].  Retrieving each bucket
+     takes K-1 requests of SS bytes each, and one request of (m+I)
+     bits.  Each such request yields B bytes.  So for PIR, User i uses
+     bandwidth of:
+
+         Buckets[i] * [ (K-1)*SS + (m+I)/8 + B ]
+
+     Call the above volume ClientPIRVol[i].
+
+     Additionally, each user needs to fetch the metaindex via
+     bittorrent.  This should take (assuming the idealized bittorrent
+     characteristics above), an additional (2*MS) bytes per "day".
+
+   Distributer bandwidth per "day", assuming idealized Bittorrent:
+
+     PS + SUM( ClientB[i]) ) / S
+
+===============
+Comparison: Type I nymservers
+
+   (Ignoring Type I overhead.)
+
+   r -- reply block size
+   L -- reply block path length
+   S -- number of mixes on mix net.
+
+   Storage needed at nymserver:
+
+      r * N
+
+   Bandwidth needed at nymserver, per "day":
+
+      SUM(Vol[i]) + SUM(CVol[i])
+
+   Bandwidth needed by user i, per "day":
+
+      CVol[i]
+
+   Bandwidth needed across entire mix net, per day:
+
+      2*L*SUM(CVol[i])
+
+      (every node in each reply block must receive and send every
+      message.)
+
+   Bandwidth used by mix node, per "day":
+
+      2*L*SUM(CVol[i])/S
+
+===============
+Comparison: alt.anonymous.messages, used securely.
+
+   S -- number of news servers
+
+   Storage needed at each news server:
+
+      W * SUM( CVol[i] )
+
+   Bandwidth needed at news server, per day:
+
+      SUM( CVol[i] ) * (N/S + 1)
+
+      (Each server retrieves each message once, and relays all posts
+      to N/S users.)
+
+   Client bandwidth per "day":
+
+      SUM( CVol[i] )
+
+===============
+Comparison: Type III nymserver design (Underhill)
+
+   r -- reply block size (2K)
+   P -- payload size (28K)
+   M -- packet size (32K)
+   W -- maximum interval at which users must replenish reply blocks,
+        in "days".
+   S -- number of mixes on mix net.
+
+   All of this stuff is *very* approximate.
+
+   Storage needed at nymserver:
+
+      (best case -- holding only reply blocks.)
+      >= r * SUM( CEIL(CVol[i]/P) * W )
+
+      (worst case -- out of reply blocks for everybody.)
+      < SUM( CEIL(CVol[i]/P) * W)
+
+   Bandwidth needed at nymserver, per day:
+
+      (Nymserver receives messages, sends compressed messages in
+      packets, and receives SURBs.)
+
+      SUM(Vol[i]) + SUM( CEIL(CVol[i]/P) * M) + SUM(CEIL(CVol[i]/P)*r)
+      == SUM(Vol[i]) + (M+r)*SUM(CEIL(CVol[i]/P))
+
+   User i bandwidth, per "day":
+
+      (P+r)*CEIL(CVol[i]/P)
+
+   Bandwidth per mix on mix net, per "day"
+
+      [2 * L * (M+r) * SUM(CEIL(CVol[i]/P)) ] / S

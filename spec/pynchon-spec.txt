@@ -1,0 +1,766 @@
+$Id: pynchon-spec.txt 104 2007-04-24 12:47:49Z rabbi $
+                  Pynchon Gate Protocol Draft Specification
+
+                 (Spec draft by Nick Mathewson with 
+                  contributions from Len Sassaman;
+            original design by Bram Cohen and Len Sassaman)
+
+
+
+Table of Contents
+
+   1.       Overview
+   1.1.     Notation and terminology
+   1.2.     Cryptographic functions
+   2.       Encrypting and packaging messages
+   2.1.     Key maintenance
+   2.2.     Packaging messages
+   2.2.1.   Message synopses
+   2.3.     Managing pending messages
+   2.4.     Decrypting packaged messages
+   3.       The bucket pool
+   3.1.     Bucket pool formats
+   3.2.     Constructing the bucket pool
+   3.3.     Distributing the bucket pool
+   4.       Retrieving the bucket pool
+   4.1.     PIR protocol
+   4.1.1.   Error codes
+   4.1.2.   Optimizing the distributor implementation
+   4.2.     Retrieving a bucket
+   4.3.     Retrieving a cycle's worth of messages
+   5.       Account administration
+   6.       System information
+
+
+1. Overview
+
+   The Pynchon Gate Protocol (PynGP) uses Private Information Retrieval to
+   provide strong pseudonymous email delivery.  The design works (roughly)
+   as follows:
+
+       ----------     ----------
+       I Sender I ... I Sender I
+       ----------     ----------
+            I  email    I
+            V           V
+       ----------------------
+       I Nymserver/Collator I<--------------------
+       ----------------------                    I Administrative
+           I bucket pool  I                      I messages
+           V              V                      I
+    ---------------     ---------------          I
+    I Distributor I ... I Distributor I          I
+    ---------------     ---------------          I
+          I  PIR buckets I                       I
+          V              V                       I
+          ----------------                       I
+          I   Recipient  I------------------------
+          ----------------
+
+   Messages arrive at a nymserver, addressed to pseudonymous identities.  The
+   nymserver encrypts the messages as they arrive, and stores them until the
+   end of the current fixed "cycle".  Once a cycle has elapsed, the nymserver
+   collates the messages into a "bucket pool," and relays the entire bucket
+   pool for the cycle to a set of distributors.
+
+   To retrieve her mail, the recipient retrieves a description of each
+   cycle's bucket pool, and performs a PIR operation with several
+   distributors to retrieve "her" buckets.  If she performs the operation
+   correctly, and if any of the distributors she chooses are honest, then the
+   distributors cannot learn which buckets she has downloaded.
+
+   The recipient can administer her account by sending "control messages" to
+   the nymserver through an anonymizing layer such as the Type III remailer
+   network.
+
+1.1. Notation and terminology
+
+   H(x) -- A cryptographic digest of a string x.
+   x|y  -- The string x concatenated with the string y.
+   LEN(x) -- The length of a string x.
+   R(n) -- n octets of random data.
+   INT(v,n) -- The nonnegative integer "v", expressed as a n-octet value
+       in network (big-endian) order.
+   PRNG(s,n) -- A cryptographically strong pseudorandom sequence of n octets,
+       generated using the seed s.
+   Z(n) -- A sequence of n zero octets.
+   ENC(s,k) -- Encrypt the string s using a stream cipher, with the key k.
+   DEC(s,k) -- Decrypt the string s using a stream cipher, with the key k.
+   COMPRESS(s) -- Compress the string s using the "deflate" algorithm and the
+       zlib message format as defined in RFCs 1950 and 1951.
+
+   "abc" -- A three-byte string, containing the ASCII values for the
+        characters "a", "b", and "c".  Unless otherwise noted, strings are
+        _not_ NUL-terminated.
+
+   [61 62 63] -- A three-byte string, containing bytes with the hexadecimal
+        values 61, 62, and 63.
+
+   x[a:b] -- A substring of the string x, starting on the a'th character of
+        x, and ending with the b-1'th character of x.  (Thus, x[0:LEN(x)] =
+        x.)
+
+   HASH_LEN -- The length of the output of our cryptographic digest function.
+   SEED_LEN -- The length of the seed for our PRNG.
+   KEY_LEN -- The length of the keys used by our encryption functions.
+
+   K -- A client-selected security parameter determining how many
+        distributors the client will connect to.
+
+   (We require that HASH_LEN >= KEY_LEN and HASH_LEN >= SEED_LEN)
+
+1.2. Cryptographic functions
+
+   To implement PynGP, we recommend AES-128 in counter mode for encryption
+   (so that ENC == DEC); SHA-256 for our hash function; and ENC(Z(n),s) as
+   our PRNG.
+
+2. Encrypting and packaging messages
+
+2.1. Key maintenance
+
+   For every recipient, the nymserver stores a long-term public key, and a
+   short-term shared secret.  Shared secrets are set at account creation
+   time, and can be reset by recipients later on.
+
+   The shared secret is updated every cycle, such that, if S[i] is the
+   shared secret in cycle i, then
+      S[i+1] = H(S[i]|"NEXT CYCLE").
+
+   From each S[i], the nymserver derives a set of sub-secrets for individual
+   messages received that cycle.  The j'th sub-secret on day i is:
+      SUBKEY(j+1,i) = H(SUBKEY(j,i) | "NEXT SECRET")
+      SUBKEY(0,i) = H(S[i] | "NEXT SECRET")
+
+   {Rationale: We use a separate chain of keys for each cycle so that it is
+   easier for a user to resynchronize after missing a few cycles.}
+
+   Also, the nymserver derives an opaque UserID for each recipient each
+   cycle:
+      UserID[i] = H(S[i] | "USER ID")
+
+   Implementations SHOULD discard old secrets as soon as they are no longer
+   needed.  Thus, at the start of each cycle i, a nymserver SHOULD derive
+   S[i+1], UserID[i], and SUBKEY(0,i), and immediately discard S[i].  After
+   using each SUBKEY(j,i), the nymserver SHOULD calculate
+   SUBKEY(j+1,i) and discard SUBKEY(j,i).  After each cycle, the nymserver
+   SHOULD discard the last SUBKEY, and UserID[i].
+
+2.2. Packaging messages
+
+   Every cycle, a user receives zero or more encrypted 'messages' from the
+   nymserver.  These messages can be emails, padding, or other status
+   messages.
+
+   The messages in a cycle i are encrypted in order, with the j'th message
+   received on i encrypted and identified using derivatives of SUBKEY(j,i) as
+   follows:
+
+         MsgID(j,i) = H(SUBKEY(j,i) | "MESSAGE ID")
+         MsgKey(j,i) = H(SUBKEY(j,i) | "MESSAGE KEY")
+
+   MsgKey(j,i) is used as a key to encrypt the message, and MsgID(j,i) is
+   prepended to the encrypted message in order to identify it to the user
+   (Message IDs are necessary because messages may be packaged out of order.)
+   Encryption uses a stream cipher, so that encrypted message length is the
+   same as plain-text length.  Since keys are not re-used, no IV is
+   necessary.
+
+   {Rationale: We derive MsgKey from SUBKEY rather than using SUBKEY
+   directly, so that a user can store MsgKey(j,i) without worrying that a
+   compromise will expose MsgKey(j+1,i).}
+
+   [XXXX Should we just have MsgID(j,i) = H(MsgKey(j,i)) ? - NM ]
+
+   The 0'th subkey is reserved for the INDEX message.  The 1'st subkey is
+   reserved for the SUMMARY message.
+
+   All messages begin with a single-octet 'TYPE' field.  The values for TYPE
+   are:
+
+         INDEX     [00]
+         PAD_REST  [01]
+         MAIL      [02]
+         ACK       [03]
+         SUMMARY   [04]
+         ERROR     [FF]
+
+   All message types except for PAD_REST use in the following format:
+
+         TYPE     Message type    [1 octet]
+         DATA     Message body    [LEN octets]
+         HASH     Hash of message [HASH_LEN octets]
+
+   HASH is equal to H(TYPE|DATA).  It is redundant.
+
+   PAD_REST uses a variable length format:
+
+         TYPE     PAD_REST type   [1 octet]
+         PADDING  Random data     [Up to end of the current bucket]
+
+   PAD_REST can only appear as the last of a user's messages in a given
+   cycle; thus, it does not need a length field.
+
+   Other message types have bodies as follows:
+
+         TYPE: INDEX [00]
+         DATA: A description of the contents of all messages in today's
+               buckets.  It begins with the number of messages in today's
+               buckets, encoded as a 4-byte big-endian integer.  Then,
+               for each message, in includes:
+                    ID   -- The MsgID for the message  [HASH_LEN octets]
+                    LEN  -- The length of the encrypted message [4 octets]
+         NOTES: There MUST be exactly one index message in each cycle's worth
+                of buckets, and it MUST appear first.  The index message
+                itself is not included in the count of messages.
+
+                The index message is always encrypted with MsgKey(0,i).
+
+         TYPE:  MAIL [02]
+         DATA: One or more email messages, concatenated, then compressed.
+               Each message M is prefixed with a length field, as
+               INT(LEN(M),4)|M .
+         NOTES: Nymservers SHOULD generate MAIL messages for incoming email
+                as greedily as possible, to minimize the amount of time that
+                unencrypted mail is stored.
+
+         TYPE:  ACK [03]
+         DATA:  C         Cookie         [HASH_LEN octets]
+         NOTES: Acknowledges that the nymserver has received a control
+                message from the user and processed it.  The 'cookie'
+                must match the cookie sent in the control message being
+                acknowledged.
+
+         TYPE:  SUMMARY [04]
+         DATA:  Message synopses for messages not included in this cycle's
+                bucket.  See 2.2.1 below.
+
+         TYPE:  ERROR [FF]
+         DATA:  ERR      Error code     [2 octets]
+                MSG      Message        [Variable]
+
+2.2.1. Message synopses
+
+   When it is not possible for the nymserver to package all of a user's
+   pending mail, it instead packages as much as it can, and uses the rest of
+   the user's space to include a synopsis for each undelivered message it
+   received in that cycle.
+
+   The synopsis for an email consists of one or more of the email's headers,
+   in RFC822 format.  The following headers MUST be included in synopsis when
+   present: "From", "To", "Cc", "In-Reply-To", "Message-ID", "Subject".
+   Other headers MAY be included or omitted.  Nymservers MAY add additional
+   headers for user convenience, for example by running SpamAssassin or
+   similar tools to mark suspicious messages as probably spam.
+
+   The nymservers SHOULD compress and encrypt each synopsis at the same time
+   as it encrypts its corresponding messages.  To encrypt the synopsis for
+   message j, received on cycle i, the nymserver uses the key: SynopKey(j,i)
+   = H(SUBKEY(j,i) | "SYNOPSIS KEY")
+
+   To pack multiple synopses into a SUMMARY message, each is first prefixed
+   with its corresponding message ID, then a 4-octet integer size field.
+
+2.3. Managing pending messages
+
+   When a nymserver receives an email for a user, it encrypts that message
+   and its synopsis as described in 2.2 and 2.2.1. above, and stores them,
+   indexed by the user, by the message ID (described in 2.2) and by the cycle
+   in which they were received.
+
+   When building a user's buckets for a given cycle, the nymserver tries
+   to include all the pending messages for that user.  If this is not
+   possible, the nymserver instead includes:
+
+      - As many pending messages as possible.
+      - All ACK and ERR messages.
+      - A SUMMARY message listing all pending messages *not* included in
+        the current cycle.
+
+        [XXXX Should we list everything that's pending, or should we list
+        everything that's pending and new? -NM]
+
+   When choosing which messages to include, the nymserver SHOULD by default
+   include oldest first, but MAY allow users to configure other preferences,
+   and MUST allow users to specifically override its choice of messages by
+   requesting particular messages to be delivered or deleted (see section 5
+   below).
+
+   The nymserver SHOULD delete pending messages that it has not been able
+   to deliver for a long time, and MAY delete messages to force disk quota
+   compliance.
+
+2.4. Decrypting packaged messages
+
+   Upon receiving their messages for a cycle, clients decrypt the messages
+   as follows.
+
+       1.  First, decrypt the INDEX message with MsgKey(0,i).  Use the
+           INDEX message to split the bucket into messages; associate each
+           message with its message ID.
+
+       2.  For each message ID in the INDEX message, check to see whether we
+           have stored that message ID from a previous cycle.  If so, use the
+           corresponding message key to decrypt the message.
+
+       3.  See whether we have a message with MsgID(1,i).  If so, this is
+           the SUMMARY message.  Decrypt it.
+
+       4.  Generate MsgID(2,i) ...  MsgID(N,i) until a message ID is found
+           which is not listed in the SUMMARY message or the INDEX message.
+           Decrypt all messages listed in the INDEX message.  For each
+           MsgID in the summary, store it and its corresponding key until
+           the message is received in a later cycle, or until the user tells
+           the nymserver to delete the message, or until the message is "too
+           old"
+
+3. The bucket pool
+
+3.1. Bucket pool formats
+
+   Users find and validate their buckets through a three-level indexing
+   structure:
+
+          ------------------------------
+          I        Meta-index          I
+          ------------------------------
+           I                      I
+           V                      V
+      ----------------     ----------------
+      I Index Bucket I ... I Index Bucket I
+      ----------------     ----------------
+       I ... I ... I ...
+       I     V     V
+       V
+   ------------------   ------------------
+   I Message bucket I-->I Message bucket I--> ...
+   ------------------   ------------------
+
+   For each cycle, all users download a common signed meta-index, from which
+   they learn:
+         1. Which index bucket points to their messages.
+         2. The hash of that index bucket.
+
+   Users retrieve the correct index bucket via PIR, and learn:
+         1. Which message bucket(s) contain their messages
+         2. The hash of the first such message bucket.
+
+   Finally, users retrieve their message buckets via PIR.  Each message
+   bucket contains:
+         1. A portion of the user's packaged messages.
+         2. A hash of the user's next message bucket (if this message bucket
+            is not the user's last).
+
+   Metadata:
+
+      V      Protocol version        [2 octets]
+      NSID   Nymserver ID            [HASH_LEN octets]
+      CYC    Cycle number            [4 octets]
+      BS     Bucket size             [4 octets]
+      MLen   Length of metaindex     [4 octets]
+      MI     Metaindex               [MLen octets]
+      SLen   Length of signature     [2 octets]
+      SIG    Signature               [SLen octets]
+
+   The protocol version for this version of the spec is 0.  The cycle number
+   is the index of cycle for which this metadata applies; cycle numbers
+   should begin at 0 and increase by 1 for each cycle.
+
+   SIG is an RSA signature of the hash of the metadata up through MI, using
+   OAEP padding and PKCS1 encoding.
+
+   Metaindex entry
+
+      UID    First UserID in index bucket [HASH_LEN octets]
+      IDX_H  Hash of index bucket         [HASH_LEN octets]
+
+   Index entry
+
+      UID    UserID                               [HASH_LEN octets]
+      M_IDX  Index of user's first message bucket [4 octets]
+      M_H    Hash of user's first message bucket  [HASH_LEN octets]
+
+   Message bucket
+
+      H      Hash of next message bucket          [HASH_LEN octets]
+      DATA   Packaged message data                [BS-HASH_LEN octets]
+
+3.2. Constructing the bucket pool
+
+   At the end of every cycle, the collator takes each recipient's packaged
+   messages for that cycle and assembles them into buckets, as follows:
+
+      1. Choose a size in bytes for the cycle's buckets.  Call this size
+         BUCKET_SIZE.
+
+      2. Sort all users who will receive messages in this cycle by their
+         UserIDs.  Let USER[i] = the i'th such user.
+
+         Let N be the number of users who will receive any messages in this
+         cycle.
+
+      3. Determine the number N_INDEX of "index buckets" that
+         will be needed.  This will be equal to
+
+            N_INDEX = CEIL( (N * INDEX_ENTRY_LEN) / USERS_PER_BUCKET )
+
+         where
+            USERS_PER_BUCKET = FLOOR(BUCKET_SIZE / INDEX_ENTRY_LEN)
+
+      4. For each user USER[i], determine the number of buckets needed to
+         hold all of U's packaged messages.  This will be equal to:
+
+            N_BUCKETS[i] = CEIL( VOLUME[i] / (BUCKET_SIZE - HASH_LEN) )
+
+         where VOLUME[i] is the total length of User[i]'s packaged messages.
+
+         Let FIRST_MSG_BUCKET[i] = N_INDEX + SUM{j=0..i-1} N_BUCKETS[j]
+
+         Let TOT_MSG_BUCKETS be the sum of N_BUCKETS[i] for all U.
+
+      6. Construct the message buckets.
+
+         For each element of USER[i], in reverse order:
+
+             Concatenate the packaged messages of USER[i] into a string M.
+
+             Let PAD_LEN = BUCKET_SIZE-HASH_LEN *
+                           CEIL( LEN(M) / (BUCKET_SIZE-HASH_LEN) ) - LEN(M)
+
+             Append a PAD_REST message to M, of length PAD_LEN.
+
+             Divide M into N_BUCKETS[i] strings of length BUCKET_SIZE-HASH_LEN
+
+             For j = N_BUCKETS[i]-1 down to 0:
+
+                Let INDEX = FIRST_MSG_BUCKET[i] + j
+
+                Let BUCKET[INDEX] = H(BUCKET[INDEX+1]) | S[j]
+
+      7. Construct the index buckets.
+
+         For j = 0 to N_INDEX-1,
+
+             Let FIRST_USER[j] = j*(USERS_PER_BUCKET)
+             Let LAST_USER[j] = (j+1)*(USERS_PER_BUCKET) - 1
+
+             Let B = ""
+
+             For i = FIRST_USER[j] through LAST_USER[j],
+
+                 Let IdxEnt = UserID[USER[i]]            |
+                              INT(FIRST_MSG_BUCKET[i],4) |
+                              H(BUCKET[FIRST_MSG_BUCKET[i]])
+
+                 Let B = B | IdxEnt
+
+             Let BUCKET[j] = B.
+
+      8. Construct the meta-index.
+
+         Let MI = ""
+
+         For j = 0 to N_INDEX-1:
+
+            Let MetaIdxEnt = UserID[FIRST_USER[j]] | H(BUCKET[j])
+
+            Let MI = MI | MetaIdxEnt
+
+         The meta-index is equal to the final value of MI.
+
+
+   Note: in practice, collators should run steps 6, 7, and 8 in parallel,
+   so that they only need to process each message bucket once.
+
+3.3. Distributing the bucket pool
+
+   Every distributor needs a copy of the bucket pool.  To get it, at the
+   end of each cycle, the distributors download it via Bittorrent.
+
+   {XXXX Specify how they know what URL to use; how they know when it's
+    ready, etc.}
+
+   After downloading the pool, distributors check that all of its hashes
+   match the values computed above.
+
+4. Retrieving the bucket pool
+
+4.1. PIR protocol
+
+   The protocol's transport layer is TLS: users negotiate a TLS connection
+   with a given distributor, and then relay PIR messages as described below.
+
+   Implementations SHOULD prefer cipher-suites that support ephemeral keys,
+   and MUST NOT support weak TLS cipher-suites.
+
+   Distributors MUST provide a two-level certificate chain with their TLS
+   handshake.  One certificate MUST be a self-signed certificate for their
+   long-term public key, and the other certificate should be signed by the
+   first one.  The connection MUST use the private key of the second
+   certificate.  Distributors SHOULD rotate these private keys regularly.
+
+   Clients MUST validate these certificates when they first connect to each
+   distributor, and MUST close any connection to a distributor whose
+   certificates are non-conformant.  Clients MAY cache the results of
+   certificate validation.
+
+   [XXXX Say something about TLS sessions.]
+
+   [XXXX Do we want to do away with SHORT_PIR_REQUESTS?]
+
+   The PIR message format is as follows:
+
+       TYPE   [1 octet]
+       LEN    [4 octets]
+       DATA   [Len octets]
+       HASH   [HASH_LEN octets]
+
+   HASH is equal to H(TYPE | LEN | DATA).
+
+   The format of 'DATA' is dependent on 'TYPE'.  Recognized values of TYPE
+   are:
+
+       0 -- VERSION
+       1 -- SHORT_PIR_REQUEST
+       2 -- LONG_PIR_REQUEST
+       3 -- PIR_RESPONSE
+       4 -- GET_METADATA
+       5 -- METADATA
+     255 -- ERROR
+
+   The corresponding formats of DATA are:
+
+       TYPE: VERSION [0]
+       DATA: Sequence of
+                 VER  Protocol version  [2 octets]
+                 VER  Protocol version  [2 octets]
+                   ...
+
+       TYPE: SHORT_PIR_REQUEST [1]
+       DATA: NYMID   Nymserver ID    [HASH_LEN octets]
+             CYC     Cycle number    [4 octets]
+             SEED    PRNG seed       [SEED_LEN octets]
+
+       TYPE: LONG_PIR_REQUEST [2]
+       DATA: NYMID   Nymserver ID    [HASH_LEN octets]
+             CYC     Cycle number    [4 octets]
+             MASK    Bitmask         [CEIL(N_BUCKETS / 8) octets]
+
+       TYPE: PIR_RESONSE [3]
+       DATA: XB      Xor-ed buckets  [BUCKET_SIZE octets]
+
+       TYPE: GET_METADATA [4]
+       DATA: NYMID   Nymserver ID    [HASH_LEN octets]
+             CYC     Cycle number    [4 octets]
+
+       TYPE: METADATA [5]
+       DATA: M       Metadata        [variable length]
+
+       TYPE: ERROR [255]
+       DATA: CODE    Error code      [2 octets]
+             MSG     Message         [variable length]
+
+
+   The protocol exchange proceeds as follows.
+
+      1.  The first message MUST be sent by the client, and must be a VERSION
+          message listing all the protocol versions that the client
+          understands.  (Currently, the only known version is 0.XXXXX)  
+          The server MUST reply with a VERSION message choosing a single
+          one of those versions, or with an ERROR message (code
+          'BAD_VERSION').
+
+          Once the client receives the VERSION message from the server, it
+          then sends one or more messages to the server.  The server replies
+          to each of these messages in sequence.  The client need not wait
+          for a reply before sending its next message.
+
+      2.  If the client sends a GET_METADATA message, the server tries to
+          find the signed metadata for the identified nymserver and cycle.
+          If the metadata is found, the server answers with a METADATA
+          message containing the metadata.
+
+          If the server does not recognize the nymserver ID, it answers with
+          an ERROR message (code 'BAD_NYMSERVER').  If it does recognize the
+          nymserver, but it no longer has the data for the requested cycle,
+          or it has not yet retrieved the data for the requested cycle, it
+          answers with an ERROR message (code 'CYCLE_EXPIRED' or
+          'CYCLE_NOT_YET') respectively.
+
+      3.  If the client sends a LONG_PIR_REQUEST message, the server first
+          tries to find the bucket pool for the requested nymserver/cycle
+          pair.  If it cannot, it answers with an ERROR message as in [2]
+          above.
+
+          Assuming the bucket pool is found, the server checks whether
+          Len(MASK) == CEIL(N_BUCKETS/8).  If not, it answers with an ERROR
+          message (code 'BAD_MASK_LEN').
+
+          Finally, the server treats MASK as sequence of bits, running from
+          the MSB of the first byte of MASK to the LSB of the last byte of
+          mask.  Let Bit[i] be the i'th such bit.  The server computes a PIR
+          response as follows:
+
+              Let XB = Z(BUCKET_SIZE).
+
+              For i = 0 .. N_BUCKETS-1:
+                 If Bit[i] is 1:
+                    Let XB = XB XOR BUCKET[i]
+
+          The server then answers the client with a PIR_RESPONSE message
+          whose body is XB.
+
+      4.  If the client sends a SHORT_PIR_REQUEST message with a given SEED,
+          the server computes
+
+               MASK = PRNG(SEED, CEIL(N_BUCKETS/8))
+
+          and responds as if the client had sent a LONG_PIR_REQUEST message
+          with the computed mask.
+
+4.1.1. Error codes
+
+   The values for error codes are given below.
+
+   BAD_VERSION    [00 00]  (No version was recognized)
+   BAD_NYMSERVER  [00 01]  (The specified nymserver was not recognized)
+   CYCLE_EXPIRED  [00 02]  (The requested cycle's data is no longer retained)
+   CYCLE_NOT_YET  [00 03]  (The requested cycle's data is not yet retrieved)
+   BAD_MASK_LEN   [00 04]  (The provided mask was too long or too short)
+
+   OTHER          [FF FF]  (Something else happened.)
+
+4.1.2. Optimizing the distributor implementation.
+
+   To avoid thrashing disk and memory caches, distributors should consider
+   handling all pending PIR requests in parallel, as follows:
+
+   Repeat:
+      For i = 0 .. N_BUCKETS-1:
+        For j = 1 .. N_PENDING_REQUESTS:
+          If Request[j] has Bit[i]=1, then:
+             Let XB[j] = XB[j] XOR BUCKET[i]
+          If End_bucket[j] == i:
+             Send XB[j] as a response to Request[j], and remove Request[j]
+             from the pending list.
+
+        If any new request has arrived:
+          Put it at some index r.
+          Let XB[r] = Z(BUCKET_SIZE).
+          Let End_bucket[r] = i.
+
+4.2. Retrieving a bucket
+
+   To download a specific bucket B from cycle CYC of nymserver NYMID, clients
+   should behave as follows: XXXX
+
+      1. Connect to K chosen distributors and negotiate protocol versions, if
+         not already connected.
+      2. Generate 2 sets of K-1 random seeds ALPHA_SEED[1..K-1], 
+         ETA_SEED[1..K-1].
+      3. Let MASK = ALPHA_SEED[1] XOR ALPHA_SEED[2] ... XOR ALPHA_SEED[K-1]
+      4. Flip the B'th bit of MASK.
+      5. Generate ETA_MASK as a random string of bitlength idential to 
+         MASK.
+      6. Permute the chosen distributors into a randomly selected order.
+
+         Send the first K-1 distributors SHORT_PIR_REQUEST messages, each
+         with a different one of the K-1 elements of both ALPHA_SEED and 
+         ETA_SEED, randomizing the which set's element is chosen to be sent
+         first..
+
+         Send the last distributor a LONG_PIR_REQUEST message with MASK for
+	 both sets, randomizing which set's MASK is sent first.
+
+      7. Cache the values of each element of ETA_SET and the corresponding
+         distributor to which it was sent. 
+
+      8. Compute the XOR of the ALPHA_SET responses.  This is the value of 
+         the bucket. If this fails, see the section on Byzantine server 
+         detection (Section 4.4).
+
+4.3. Retrieving a cycle's worth of messages.
+
+   To download _all_ of its messages for a given cycle CYC of nymserver
+   NYMID, clients should behave as follows:
+
+      1. Connect to K randomly chosen distributors.
+
+      2. Ask a randomly chosen distributor for the metadata for NYMID,CYC.
+         Make sure that the metadata is signed correctly, and has the correct
+         values for NYMID and CYC.
+
+      3. Compute our UserID for the CYC.  Call this "U".
+
+      4. Find the largest I such that the I'th element of the metaindex has
+         UID <= U.
+
+      5. Use PIR to retrieve index bucket I.  Verify that the hash of this
+         bucket is equal to IDX_H in the I'th element of the metaindex.
+
+      6. Find the largest J such that the J'th element of the index bucket
+         has UID <= U.
+
+         If the UID at J is U, then we have messages today.  Otherwise, we
+         don't, but we need to retrieve messages anyway to avoid leaking our
+         identity.
+
+         Set M_IDX and M_H from the selected index entry.
+
+      7. Use PIR to retrieve MAX_BUCKETS buckets starting at M_IDX.
+
+         Verify that, for each downloaded BUCKET[j]
+             M_H = HASH(BUCKET[j])                      {if j == M_IDX}
+             BUCKET[j-1][0:HASH_LEN] == H(BUCKET[j])    {otherwise}
+
+         (Clients MUST verify all buckets, even buckets for messages they
+         don't want, so that compromised distributors can't learn whether the
+         client really wanted MAX_BUCKETS buckets or not.)
+
+      8. Unpack the messages in the bucket.
+
+//   If a client retrieves a bucket with an in-correct hash, it must have
+//   received an incorrect PIR response from at least one distributer.  The
+//   client then re-downloads the offending bucket, as follows:
+       {XXXX how exactly do we reattempt a bucket?  Is it better to try a
+        completely different set of servers?  Or to try replacing a just a
+        couple of the distributors in the current PIR set?}
+
+       {XXXX Do the Byzantine detection, and correct for it. However, I think
+        that round is a wash, and you should either punt to the next one,
+        or re-download with a new set of servers, minus the Byzantine ones.
+        Thoughts? --LS.}
+
+4.4. Byzantine server detection.
+
+   {XXXX We need to introduce the validator in the architecture section.}
+   
+   If a client retrieves a bucket with an incorrect hash, it must have
+   received an incorrect PIR response from at least one distributor. The
+   client can then attempt to identify which distributor or distributors
+   provided the incorrect response as follows:
+
+     1. Connect to the validator.
+     2. Submit ETA_SEED[1..K-1] and ETA_MASK. 
+     3. Compare the results from the validator with the previously cached 
+        distributor responses for the elements of ETA_SET. If mis-matched, 
+        flag the offending distributor(s) as having returned invalid 
+        responses.
+     [XXXX 4. Add the Byzantine distributor to a list of servers never to
+      use? After some number of repeat offenses? Should we send it random
+      junk instead of an ALPHA_SET? What about notification to the system
+      as a whole? --LS.]
+
+     [What about performance issues on the validator? --LS.]
+
+5. Account administration
+
+   {XXXX Write me.  Clients need a way to set preferences, create accounts,
+   request messages to be included, request message to be deleted.}
+
+6. System information
+
+   {XXXX Write me.  This section needs to include:
+      - A way for clients to learn distributor identities and locations
+      - A way 
+   }

@@ -1,0 +1,94 @@
+PROJECT OVERVIEW:
+
+This is an in-progress attempt to implement the Pynchon Gate, a
+pseudonymous email system designed by Len Sassaman and Bram Cohen,
+tweaked by Nick Mathewson.
+
+
+If you are not interested in software that breaks a lot, or if you
+insist upon it actually doing something useful to you when it doesn't
+break, then this is probably not for you yet.
+
+
+For more information about the Pynchon Gate, have a look at the papers
+at
+  http://freehaven.net/anonbib/#sassaman:wpes2005
+and
+  http://freehaven.net/anonbib/#cosic-2007-001
+and the spec at
+  http://freehaven.net/pynchon/doc/pynchon-spec.txt
+
+Please take that version of the spec with a grain of salt; it hasn't
+been updated in a while, and it probably has some crazy over-
+engineering and some big missing points.
+
+
+Nick Mathewson is writing the code; it is released under the "MIT"
+license.  Nick might release it under a different license later; if
+you would not be okay with that, please talk with Nick before sending
+him any code or patches.
+
+
+A fully complete Pynchon Gate implementation will have these pieces:
+
+   * Nymservers that receives incoming mail for keyholders, encrypts
+     it to their keys, and preferentially decides what pieces of the
+     mail to ship first, while not shipping more than any user's quota
+     at a time.
+
+     * A remailer interface to the nymserver that allows keyholders to
+       send pseudonymous mail from their accounts, change their
+       account settings, open new accounts, and so on.
+
+   * A collator (one per nymserver) that takes all of the mail that
+     ought to go to each user, packages it in a hash-tree-like bucket
+     structure, and publishes it to a set of distributors.
+
+   * A set of distributors that run a PIR protocol so that users can
+     download their mail without leaking their identity to any
+     participant.
+
+     * A utility that runs on the distributors to fetch mail from the
+       collator.
+
+   * A user client that decides which buckets to fetch and fetches
+     them, and handles communications with the nymserver on behalf of
+     the user.
+
+     * A high-latency anonymous channel (like Mixminion) for sending
+       messages to the nymserver.
+
+
+
+Right now, the only part that's implemented is the distributor code.
+It's called "Inverarity".  It aims to be really fast, since the
+distributors are likely to be the performance bottleneck of the whole
+system.
+
+
+See src/inverarity/README for more information about its status and
+how to try it out.
+
+
+The next parts I'd like to work on are a quick-and-dirty collator,
+tentatively to be called "Maas"; the stub of a client, tentatively to
+be called "Prentice" or "Pointsman" or something; and the more
+crypto-heavy part of a nymserver, possibly to be named "Stencil" or
+"V."  or "Cherdlu".
+
+
+I'm aiming for the server parts to be clean and fast first; portable
+second.  I want them to run on recent versions of the free unixes; osx
+is okay too since it's close enough.  I do not plan to port them to
+Windows.  The client-side parts, on the other hand, should run
+everywhere.
+
+
+More help is welcome.  Please don't assume I'll have time to do very
+much very fast--I'm spending most of my time on another privacy
+project.  Also, please no naming stuff after characters in Thomas
+Pynchon that I don't want to have to explain to my nieces.
+
+
+This work is dedicated to the memory of Len Sassaman, who would have
+wanted to know what took us so long.

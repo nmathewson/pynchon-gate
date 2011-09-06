@@ -1,0 +1,4 @@
+*.o
+*~
+
+/src/inverarity/inverarity
