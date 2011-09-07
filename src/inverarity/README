@@ -131,7 +131,7 @@ In the worst case, an attacker who controlled every request except for a
 single target request could use the data-dependent branch above to mount a
 timing attack to learn how many bits were set in the target, and possibly to
 learn some of the bits set in the target.  Not good!  Instead, we do some
-timing-invariance tickery.
+timing-invariance trickery.
 
 
 Currently, Inverarity has one thread per distribution it knows about, plus

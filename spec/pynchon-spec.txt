@@ -660,7 +660,7 @@ Table of Contents
          ETA_SEED[1..K-1].
       3. Let MASK = ALPHA_SEED[1] XOR ALPHA_SEED[2] ... XOR ALPHA_SEED[K-1]
       4. Flip the B'th bit of MASK.
-      5. Generate ETA_MASK as a random string of bitlength idential to 
+      5. Generate ETA_MASK as a random string of bitlength identical to 
          MASK.
       6. Permute the chosen distributors into a randomly selected order.
 
@@ -720,7 +720,7 @@ Table of Contents
       8. Unpack the messages in the bucket.
 
 //   If a client retrieves a bucket with an in-correct hash, it must have
-//   received an incorrect PIR response from at least one distributer.  The
+//   received an incorrect PIR response from at least one distributor.  The
 //   client then re-downloads the offending bucket, as follows:
        {XXXX how exactly do we reattempt a bucket?  Is it better to try a
         completely different set of servers?  Or to try replacing a just a
