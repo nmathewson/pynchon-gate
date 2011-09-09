@@ -19,6 +19,22 @@ BEFORE WE COULD DEPLOY IT FOR HAXXORS TO USE FOR THEIR MAIL
 - Functionality
   - write logging for real
 
+- Pick a solution to the Byzantine Postman problem:
+  - See
+      "The Byzantine Postman Problem" at
+      http://www.cosic.esat.kuleuven.be/publications/article-880.pdf
+
+      "Improving the Robustness of Private Information Retrieval" at
+      http://www.cypherpunks.ca/~iang/pubs/robustpir.pdf and
+
+      "Solving the Byzantine Postman Problem" at
+      http://www.cosic.esat.kuleuven.be/publications/article-907.pdf and
+
+      "Revisiting the Computational Practicality of Private Information
+      Retrieval" at http://www.cypherpunks.ca/~iang/pubs/mspir.pdf
+
+- Pick a default system for clients to discover and choose distributors?
+
 LATER:
 - parallelize openssl bases
 - have option of more than one thread per distributor
@@ -26,3 +42,4 @@ LATER:
 - deal with byzantine peers
 - one-block requests
 - PRNG-requests
+
