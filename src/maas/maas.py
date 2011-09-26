@@ -36,7 +36,7 @@ def zero_pad(s, n):
     if len(s) > n:
         return s[:n]
     else:
-        return s+"\x00"*n
+        return s+"\x00"*(n - len(s))
 
 def get_public_key_digest(key):
     bio = BIO.MemoryBuffer()
