@@ -47,10 +47,10 @@ anything to provide forward compatibility any time soon.
 
 Flags can be:
       0x1 -- HASH
-          (XXXX say more)
+          Instead of a data response, return only a hash of the data.
 
       0x2 -- SIGN
-          (XXXX say more)
+          Sign the response.
 
 
 Currently implemented commands from the client are:
@@ -95,6 +95,16 @@ Currently implemented commands from the server are:
      Command-body:
         [4 bytes] data length
         [N bytes] data
+
+        If the HASH flag is set:
+        [32 bytes] Hash of data.
+
+        If the SIGN flag is set:
+        [32 bytes] Hash of data for signature. This includes:
+            The request, including everything but the request ID.
+            The response, including everything after the request ID, right up
+            to the start of this hash.
+        [32 bytes] Ed25519 signature of the hash above.
 
      A response to a GET or METADATA command.  The data for DATA and METADATA
      is a raw blob; the DISTLIST body is:
