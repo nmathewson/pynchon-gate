@@ -14,12 +14,17 @@
 #include "request.h"
 #include "hash.h"
 #include "logging.h"
+#include "util.h"
 
 #define WORDS_PER_CLINE 8
 
 struct distribution {
         /** The identity (hash) of this distribution. */
         uint8_t identity[32];
+        /** The identity of the source of this distributor */
+        uint8_t distributor_id[32];
+        /** The filename of this of this distribution according to the distributor */
+        uint8_t distributor_fname[32*2];
         /** The number of blocks in this distribution */
         size_t n_blocks;
         /** The length of each block in this distribution */
@@ -33,6 +38,11 @@ struct distribution {
         char *fname;
         /** The modification time that this file had when we loaded it. */
         time_t mtime;
+
+        /** Metadata for this file; mapped. */
+        uint8_t *metadata;
+        /** Size of metadata */
+        size_t metadata_len;
 };
 
 /**
@@ -111,13 +121,15 @@ distribute(const struct distribution *d, struct request **reqs, const int n_reqs
 }
 
 /**
- * If filename is a valid filename for a distribution, then set *blocksize_out
- * to its blocksize, and return 0.  Otherwise, return -1.
+ * If filename is a valid filename for a distribution, then set *blocksize_out to its blocksize,
+ * *namebase_out to the portion of the name up to but not including the '.bsINT' part, and return
+ * 0.  Otherwise, return -1.
  */
 static int
-parse_distribution_fname(const char *filename, size_t *blocksize_out)
+parse_distribution_fname(const char *filename, size_t *blocksize_out, char **namebase_out)
 {
         const char *r = strrchr(filename, '.');
+        const char *dot = r;
         if (strlen(r) < 4 || memcmp(r, ".bs", 3))
                 return -1;
         r += 3;
@@ -126,7 +138,37 @@ parse_distribution_fname(const char *filename, size_t *blocksize_out)
         if (bs <= 0 || !endptr || *endptr || bs > SIZE_MAX)
                 return -1;
         *blocksize_out = (size_t)bs;
+        *namebase_out = strndup(filename, dot - filename);
         return 0;
+}
+
+static int
+map_file(const char *filename, struct stat *st_out, uint8_t **map_out)
+{
+        int fd;
+        if ((fd = open(filename, O_RDONLY)) < 0) {
+                log_perror("open()");
+                goto err;
+        }
+
+        if (fstat(fd, st_out) < 0) {
+                log_perror("fstat()");
+                goto err;
+        }
+
+        if (!(*map_out = mmap(NULL, st_out->st_size, PROT_READ, MAP_FILE|MAP_SHARED, fd, 0))) {
+                log_perror("mmap()");
+                goto err;
+        }
+
+        close(fd);
+
+        return 0;
+err:
+        if (fd >= 0)
+                close(fd);
+        return -1;
+
 }
 
 struct distribution *
@@ -135,24 +177,26 @@ load_distribution(const char *filename)
         struct distribution *d;
         int fd = -1;
         struct stat st;
+        char *name_base = NULL;
+        char *meta_name;
+        size_t dist_len=0;
 
         if (!(d = calloc(sizeof(*d), 1)))
                 return NULL;
 
-        if (parse_distribution_fname(filename, &d->blocksize) < 0) {
+        if (parse_distribution_fname(filename, &d->blocksize, &name_base) < 0) {
                 log_error("Can't parse distribution filename");
                 goto err;
         }
 
-        if ((fd = open(filename, O_RDONLY)) < 0) {
-                log_perror("open()");
-                goto err;
-        }
+        meta_name = printf_dup("%s.meta", name_base);
+        free(name_base);
 
-        if (fstat(fd, &st) < 0) {
-                log_perror("fstat()");
+        if (map_file(filename, &st, &d->data) < 0) {
+                log_error("Couldn't map distribution file");
                 goto err;
         }
+        dist_len = st.st_size;
 
         if ((st.st_size % d->blocksize) != 0)
                 log_error("Not an integer number of blocks");
@@ -165,14 +209,20 @@ load_distribution(const char *filename)
                 goto err;
         }
 
-        if (!(d->data = mmap(NULL, st.st_size, PROT_READ, MAP_FILE|MAP_SHARED, fd, 0))) {
-                log_perror("mmap()");
-                goto err;
+        hash_digest(d->identity, d->data, dist_len);
+
+        if (map_file(meta_name, &st, &d->metadata) < 0)
+                log_error("Couldn't map metadata");
+        else {
+                d->metadata_len = st.st_size;
+                if (d->metadata_len > 8+32*5) {
+                        /* This assumes the the metadata is layed out in the way we expect */
+                        memcpy(d->distributor_id, d->metadata+8+32*2, 32);
+                        memcpy(d->distributor_fname, d->metadata+8+32*3, 32*2);
+                }
         }
+        free(meta_name);
 
-        hash_digest(d->identity, d->data, st.st_size);
-
-        close(fd);
         return d;
 err:
         if (fd >= 0)
@@ -180,6 +230,8 @@ err:
         if (d) {
                 if (d->fname)
                         free(d->fname);
+                if (d->data)
+                        munmap(d->data, dist_len);
                 free(d);
         }
         return NULL;
@@ -189,8 +241,22 @@ void
 free_distribution(struct distribution *d)
 {
         munmap(d->data, d->blocksize * d->n_blocks);
+        if (d->metadata)
+                munmap(d->metadata, d->metadata_len);
         free(d->fname);
         free(d);
+}
+
+const uint8_t *
+distribution_get_distributor_id(const struct distribution *d)
+{
+        return d->distributor_id;
+}
+
+const uint8_t *
+distribution_get_distributor_fname(const struct distribution *d)
+{
+        return d->distributor_fname;
 }
 
 const uint8_t *
@@ -221,6 +287,23 @@ distribution_matches_file(const struct distribution *d, const char *fname, const
         else
                 return DISTMATCH_OKAY;
 }
+
+int
+distribution_get_metadata(const struct distribution *d,
+                          const uint8_t **metadata_out,
+                          size_t *size_out)
+{
+        if (d->metadata) {
+                *metadata_out = d->metadata;
+                *size_out = d->metadata_len;
+                return 0;
+        } else {
+                *metadata_out = NULL;
+                *size_out = 0;
+                return -1;
+        }
+}
+
 
 /*
   Permission is hereby granted, free of charge, to any person obtaining a copy

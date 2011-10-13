@@ -165,6 +165,17 @@ my_getpass(const char *prompt, char *buf, int size)
         return len;
 }
 
+int
+strcmpend(const char *str, const char *suffix)
+{
+        const size_t str_len = strlen(str);
+        const size_t suf_len = strlen(suffix);
+
+        if (str_len < suf_len)
+                return -1;
+        return strcmp(str + str_len - suf_len, suffix);
+}
+
 /*
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to

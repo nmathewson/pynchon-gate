@@ -25,6 +25,7 @@ The command format is:
    [32 bytes] request ID
    [4 bytes] command-code
    [4 bytes] command-len
+   [4 bytes] flags
    [N bytes] Command-body  {Exactly command-len bytes.}
 
 This is the format used by both client and server for all their
@@ -43,6 +44,13 @@ Extra bytes must be ignored by implementations that don't expect them.
 
 The above paragraph should not be taken to imply that we'll actually do
 anything to provide forward compatibility any time soon.
+
+Flags can be:
+      0x1 -- HASH
+          (XXXX say more)
+
+      0x2 -- SIGN
+          (XXXX say more)
 
 
 Currently implemented commands from the client are:
@@ -67,16 +75,35 @@ Currently implemented commands from the client are:
      The bitfield selects which buckets from the distribution to xor together
      in the response.
 
+      GET_METADATA (code 0x1001)
+
+      Command Body:
+        [32 bytes] distribution ID
+
+      LIST_DISTRIBUTIONS (code 0x1002)
+
+      Command Body:
+        [Empty]
+
 
 Currently implemented commands from the server are:
 
-     DATA  (code 0x2001)
+     DATA      (code 0x2001)
+     METADATA  (code 0x2003)
+     DISTLIST  (code 0x2004)
 
      Command-body:
         [4 bytes] data length
         [N bytes] data
 
-     A response to a GET command.
+     A response to a GET or METADATA command.  The data for DATA and METADATA
+     is a raw blob; the DISTLIST body is:
+
+        [4 bytes] N: Num distributions known
+        Then, N times:
+           [32 bytes] Distributor ID
+           [64 bytes] Fname of this distribution, according to the distributor
+           [32 bytes] Distribution ID.
 
 
      ERROR (code 0x2002)

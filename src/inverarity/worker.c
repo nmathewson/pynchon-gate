@@ -191,6 +191,8 @@ join_worker(struct worker *w)
 
 static struct worker *worker_list = NULL;
 
+static int n_workers = 0;
+
 struct worker *
 find_worker(const uint8_t *identity)
 {
@@ -212,6 +214,7 @@ add_worker(struct worker *w)
 {
         w->next_worker = worker_list;
         worker_list = w;
+        ++n_workers;
 }
 
 void
@@ -222,6 +225,7 @@ remove_worker(struct worker *w)
                 if (*wptr == w) {
                         *wptr = w->next_worker;
                         w->next_worker = NULL;
+                        --n_workers;
                         return;
                 }
                 wptr = &(*wptr)->next_worker;
@@ -285,6 +289,7 @@ sweep_marked_workers(void)
                 if ((*wptr)->mark) {
                         struct worker *victim = *wptr;
                         *wptr = victim->next_worker;
+                        --n_workers;
                         victim->next_worker = stopped_workers;
                         stopped_workers = victim;
                         stop_worker(victim);
@@ -303,14 +308,14 @@ join_all_stopped_workers(void)
                 LOCK(); /* hold lock, since checking w->done. */
                 if (w->done == 2) {
                         *wptr = w->next_worker;
-
+                        UNLOCK();
                         join_worker(w);
                         struct distribution *d = free_worker(w);
                         free_distribution(d);
                 } else {
                         wptr = &(*wptr)->next_worker;
+                        UNLOCK();
                 }
-                UNLOCK();
         }
 }
 

@@ -5,9 +5,8 @@
 #ifndef INVERARITY_MAIN_H
 #define INVERARITY_MAIN_H
 
-/*
- * Nothing from main.c is exported yet.
- */
+/* DOCDOC*/
+int get_distribution_list(const uint8_t **dl_out, size_t *sz_out);
 
 #endif
 

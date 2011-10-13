@@ -33,7 +33,19 @@ int init_response_queue(struct event_base *base);
  */
 void request_queue_reply_from_worker(struct request *);
 
+/**
+ * Read and return a possibly misaligned network-order unsigned 32-bit integer from 'buf'.
+ *
+ * We can't just do "ntohl(*(uint32_t *)buf)", since not every CPU is friendly to unaligned access.
+ */
+uint32_t get_uint32(void *buf);
 
+/**
+ * Set 'buf' to hold a 32-bit integer, encoding it in network order.
+ *
+ * We can't just do "*(uint32_t *)buf = htnol(val)", since not every CPU is friendly to unaligned access.
+ */
+void set_uint32(void *buf, uint32_t val);
 
 #endif /* ifndef INVERARITY_NET_H */
 /*

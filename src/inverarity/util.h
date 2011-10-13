@@ -49,11 +49,16 @@ char *hexdup(const uint8_t *input, size_t len);
  */
 int my_getpass(const char *prompt, char *buf, int size);
 
+/**
+ * As strcmp, but compares that last strlen(suffix) characters of 'str' to 'suffix'
+ **/
+int strcmpend(const char *str, const char *suffix);
+
 #endif
 /*
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to
-  deal in the Software without restriction, including without limitation the
+  deal in the Software without restricti on, including without limitation the
   rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
   sell copies of the Software, and to permit persons to whom the Software is
   furnished to do so, subject to the following conditions:

@@ -21,6 +21,7 @@
 #include "worker.h"
 #include "net.h"
 #include "logging.h"
+#include "main.h"
 #include "util.h"
 #include "dist.h"
 
@@ -45,11 +46,6 @@ struct conn {
         int pending_requests;
 };
 
-/**
- * Read and return a possibly misaligned network-order unsigned 32-bit integer from 'buf'.
- *
- * We can't just do "ntohl(*(uint32_t *)buf)", since not every CPU is friendly to unaligned access.
- */
 uint32_t
 get_uint32(void *buf)
 {
@@ -58,11 +54,6 @@ get_uint32(void *buf)
         return ntohl(u);
 }
 
-/**
- * Set 'buf' to hold a 32-bit integer, encoding it in network order.
- *
- * We can't just do "*(uint32_t *)buf = htnol(val)", since not every CPU is friendly to unaligned access.
- */
 void
 set_uint32(void *buf, uint32_t val)
 {
@@ -108,13 +99,14 @@ static void
 send_err(struct conn *conn, uint32_t code, const uint8_t *req_id, const char *msg, int fatal)
 {
         size_t msg_len = strlen(msg);
-        char buf[16];
+        char buf[20];
         struct bufferevent *bev = conn->bev;
 
         set_uint32(buf + 0, 0x2002);
         set_uint32(buf + 4, msg_len + 8);
-        set_uint32(buf + 8, code);
-        set_uint32(buf +12, msg_len);
+        set_uint32(buf + 8, 0); /* flags */
+        set_uint32(buf +12, code);
+        set_uint32(buf +16, msg_len);
 
         if (req_id) {
                 bufferevent_write(bev, req_id, 32);
@@ -124,7 +116,7 @@ send_err(struct conn *conn, uint32_t code, const uint8_t *req_id, const char *ms
                 bufferevent_write(bev, tmp, 32);
         }
 
-        bufferevent_write(bev, buf, 16);
+        bufferevent_write(bev, buf, 20);
         bufferevent_write(bev, msg, msg_len);
 
         if (fatal) {
@@ -136,13 +128,27 @@ send_err(struct conn *conn, uint32_t code, const uint8_t *req_id, const char *ms
         }
 }
 
+static void
+send_data(struct conn *conn, const uint8_t *req_id, uint32_t command, size_t datalen, const uint8_t *data)
+{
+        uint8_t header[48];
+        memcpy(header, req_id, 32);
+        set_uint32(header+32, command);
+        set_uint32(header+36, 4+datalen);
+        set_uint32(header+40, 0);/*flags*/
+        set_uint32(header+44, datalen);
+        bufferevent_write(conn->bev, header, 48);
+        bufferevent_write(conn->bev, data, datalen);
+        memset(header, 0, sizeof(header));
+}
+
 /**
  * Try to parse and handle a get request from input, removing it from the buffer.
  *
  * Return true if we should stop handling commands after this.
  */
 static int
-handle_get_command(struct conn *conn, const uint8_t *req_id, struct evbuffer *input, uint32_t cmd_len)
+handle_get_command(struct conn *conn, const uint8_t *req_id, uint32_t flags, struct evbuffer *input, uint32_t cmd_len)
 {
         /* okay, the command is a GET.  Is its header long enough? */
         if (cmd_len < 40) {
@@ -153,7 +159,6 @@ handle_get_command(struct conn *conn, const uint8_t *req_id, struct evbuffer *in
         /* Read and parse the get header. */
         uint8_t get_header[40];
         evbuffer_remove(input, get_header, 40);
-        const uint8_t * const dist_id = get_header;
         uint32_t n_bits = get_uint32(get_header + 32);
         uint32_t block_size = get_uint32(get_header + 36);
         uint32_t bf_len = (n_bits + 7) / 8;
@@ -170,7 +175,68 @@ handle_get_command(struct conn *conn, const uint8_t *req_id, struct evbuffer *in
         evbuffer_remove(input, bits, bf_len);
         evbuffer_drain(input, cmd_len - 40 - bf_len);
 
-        start_request(get_header, dist_id, conn, n_bits, block_size, bits);
+        start_request(get_header, req_id, conn, n_bits, block_size, bits);
+
+        return 0;
+}
+
+/**
+ * Try to parse and handle a get_metadata request from input, removing it from the buffer.
+ *
+ * Return true if we should stop handling commands after this.
+ */
+static int
+handle_get_metadata_command(struct conn *conn, const uint8_t *req_id, uint32_t flags, struct evbuffer *input, uint32_t cmd_len)
+{
+        /* okay, the command is a GET.  Is its header long enough? */
+        if (cmd_len < 32) {
+                send_err(conn, 2, req_id, "GET_METADATA too short", 1);
+                return 1;
+        }
+
+        /* Read afternd parse the get header. */
+        uint8_t getmeta_header[32];
+        evbuffer_remove(input, getmeta_header, 32);
+        const uint8_t *const dist_id = getmeta_header;
+        evbuffer_drain(input, cmd_len - 32);
+
+        struct worker *w = find_worker(dist_id);
+        if (!w) {
+                send_err(conn, 6, req_id, "No such distribution", 0);
+                return 0;
+        }
+        const struct distribution *dist = worker_get_distribution(w);
+        const uint8_t *metadata;
+        size_t metadata_len;
+        if (distribution_get_metadata(dist, &metadata, &metadata_len)<0) {
+                send_err(conn, 9, req_id, "Distribution had no metadata", 0);
+                return 0;
+        }
+
+        /* Send the reply. */
+        /* XXXX maybe use evbuffer_add_reference for this later */
+        send_data(conn, req_id, 0x2003, metadata_len, metadata);
+
+        return 0;
+}
+
+/**
+ * Try to parse and handle a list_dists request from input, removing it from the buffer.
+ *
+ * Return true if we should stop handling commands after this.
+ */
+static int
+handle_list_dists_command(struct conn *conn, const uint8_t *req_id, uint32_t flags, struct evbuffer *input, uint32_t cmd_len)
+{
+        evbuffer_drain(input, cmd_len); /* Ignore the command body. */
+
+        const uint8_t *dl;
+        size_t sz;
+        if (get_distribution_list(&dl,&sz)< 0) {
+                send_err(conn, 10, req_id, "No distribution list present", 0);
+                return 0;
+        }
+        send_data(conn, req_id, 0x2004, sz, dl);
 
         return 0;
 }
@@ -187,37 +253,49 @@ readcb(struct bufferevent *bev, void *conn_)
         while (1) { /* Loop to handle as many requests as possible. */
 
                 /* If the command header isn't here yet, give up and wait for more data. */
-                if (evbuffer_get_length(input) < 40)
+                if (evbuffer_get_length(input) < 44)
                         return;
 
                 /* Parse the command header */
-                uint8_t cmdheader_buf[40];
-                evbuffer_copyout(input, cmdheader_buf, 40); /* nondestructive copy */
+                uint8_t cmdheader_buf[44];
+                evbuffer_copyout(input, cmdheader_buf, 44); /* nondestructive copy */
                 const uint8_t * const req_id = cmdheader_buf;
                 uint32_t cmd = get_uint32(cmdheader_buf+32);
                 uint32_t len = get_uint32(cmdheader_buf+36);
+                uint32_t flags = get_uint32(cmdheader_buf+40);
                 if (len > max_client_cmdlen) {
                         send_err(conn, 1, req_id, "Command too long", 1);
                         return;
                 }
 
                 /* Wait for the whole command to arrive */
-                if (evbuffer_get_length(input) < 40 + len)
+                if (evbuffer_get_length(input) < 44 + len)
                         return;  /* XXXX set a watermark */
                 /* XXXX clear that watermark. */
 
                 /* Discard the command header */
-                evbuffer_drain(input, 40);
+                evbuffer_drain(input, 44);
 
                 /* We only know how to handle GET right now. */
-                if (cmd != 0x1000) {
+                switch (cmd) {
+                case 0x1000:
+                        if (handle_get_command(conn, req_id, flags, input, len))
+                                return;
+                        break;
+                case 0x1001:
+                        if (handle_get_metadata_command(conn, req_id, flags, input, len))
+                                return;
+                        break;
+                case 0x1002:
+                        if (handle_list_dists_command(conn, req_id, flags, input, len))
+                                return;
+                        break;
+                default:
                         evbuffer_drain(input, len);
                         send_err(conn, 2, req_id, "Unknown command", 0);
                         continue;
                 }
 
-                if (handle_get_command(conn, req_id, input, len))
-                        return;
         }
 }
 
@@ -312,7 +390,6 @@ eventcb(struct bufferevent *bev, short what, void *conn_)
 static void
 request_send_reply(struct request *req)
 {
-        char header[44];
         struct conn *conn = req->conn;
 
         --conn->pending_requests;
@@ -325,12 +402,7 @@ request_send_reply(struct request *req)
                 return;
         }
 
-        memcpy(header, req->req_id, 32);
-        set_uint32(header+32, 0x2001);
-        set_uint32(header+36, 4+req->blocksize);
-        set_uint32(header+40, req->blocksize);
-        bufferevent_write(req->conn->bev, header, 44);
-        bufferevent_write(req->conn->bev, req->result, req->blocksize);
+        send_data(conn, req->req_id, 0x2001, req->blocksize, req->result);
 }
 
 /**

@@ -242,6 +242,16 @@ listener_cb(struct evconnlistener *listener,
         new_connection(base, ctx, fd, sa, socklen);
 }
 
+struct distinfo {
+        uint8_t distributor[32];
+        uint8_t id[32];
+        uint8_t fname[32*2];
+        struct distinfo *next;
+};
+
+static uint8_t *the_dist_list = NULL;
+static size_t the_dist_list_size = 0;
+
 /**
  * Load files for all the distributions in the appropriate directory in our workdir, and launch
  * or stop workers as appropriate.  (We start a worker for each file not previously distributed,
@@ -256,6 +266,7 @@ load_distributed_files(const char *workdir)
         if (!directory)
                 return -1;
         DIR *d = opendir(directory);
+
         log_note("Reading files in %s...", directory);
         free(directory);
 
@@ -266,9 +277,16 @@ load_distributed_files(const char *workdir)
 
         struct dirent *de;
         int n_ok = 0;
+
+        struct distinfo *dists = NULL;
+        size_t summary_bytes = 0;
+
         while ((de = readdir(d))) { /*XXXX not a threadsafe API*/
                 if (de->d_name[0] == '.')
-                        continue;  /* Skip hidden files */
+                        continue; /* Skip hidden files */
+                if (!strcmpend(de->d_name, ".meta"))
+                        continue; /* Read metafiles later. */
+
                 char *path = printf_dup("%s/dist/%s", workdir, de->d_name);
                 log_note("Reading %s... ", de->d_name);
 
@@ -313,12 +331,59 @@ load_distributed_files(const char *workdir)
                 add_worker(w);
                 puts("looks okay.");
                 ++n_ok;
+
+                struct distinfo *di = malloc(sizeof(*di));
+                if (!di) {
+                        log_error("Couldn't alloc distinfo");
+                        continue;
+                }
+                memcpy(di->id, distribution_get_identity(dist), 32);
+                memcpy(di->distributor, distribution_get_distributor_id(dist), 32);
+                memcpy(di->fname, distribution_get_distributor_fname(dist), 32*2);
+                summary_bytes += 128;
+                di->next = dists;
+                dists = di;
         }
         closedir(d);
 
         sweep_marked_workers();
 
+        size_t sz = n_ok * 128 + 4;
+        uint8_t *dist_list = malloc(sz);
+        uint8_t *cp = dist_list;
+        set_uint32(cp, n_ok);
+        cp += 4;
+        while (dists) {
+                memcpy(cp, dists->distributor, 32); cp += 32;
+                memcpy(cp, dists->fname, 64); cp += 64;
+                memcpy(cp, dists->id, 32); cp += 32;
+
+                struct distinfo *victim = dists;
+                dists = dists->next;
+                free(victim);
+        }
+        assert(cp == dist_list + sz);
+
+        if (the_dist_list)
+                free(the_dist_list);
+        the_dist_list = dist_list;
+        the_dist_list_size = sz;
+
         return n_ok;
+}
+
+int
+get_distribution_list(const uint8_t **dl_out, size_t *sz_out)
+{
+        if (the_dist_list) {
+                *dl_out = the_dist_list;
+                *sz_out = the_dist_list_size;
+                return 0;
+        } else {
+                *dl_out = NULL;
+                *sz_out = 0;
+                return -1;
+        }
 }
 
 /**
@@ -469,6 +534,9 @@ main(int argc, char **argv)
         log_note("Clean shutdown.");
         stop_all_workers();
         join_all_stopped_workers();
+
+        if (the_dist_list)
+                free(the_dist_list);
 
         return 0;
 }

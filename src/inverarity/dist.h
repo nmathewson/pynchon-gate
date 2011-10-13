@@ -52,6 +52,16 @@ size_t distribution_get_blocksize(const struct distribution *d);
 /** Return the number of blocks in a distribution. */
 size_t distribution_get_n_blocks(const struct distribution *d);
 
+/** Return the metadata for this distribution */
+int distribution_get_metadata(const struct distribution *d,
+                              const uint8_t **metadata_out,
+                              size_t *size_out);
+
+/** Return the 32-byte identity for the distributor that made a distribution */
+const uint8_t *distribution_get_distributor_id(const struct distribution *d);
+/** Return the 64-byte filename from the distributor that made a distribution */
+const uint8_t *distribution_get_distributor_fname(const struct distribution *d);
+
 #define DISTMATCH_TOO_OLD -2
 #define DISTMATCH_NOT_ME -1
 #define DISTMATCH_OKAY 0
