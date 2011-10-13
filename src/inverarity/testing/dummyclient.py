@@ -13,8 +13,7 @@ import hashlib
 #
 # This part configures whom we will talk to, and what we will ask for.
 
-
-ID = "4DF18A15758CCC93F5A32DA9B898375A4CAA3FB8C9862784BDECBF678CF35426"
+ID = "4776F9AA3E719EBAF4E6EDB46B851CE4A288A82E12BEA7CB8D82F9DF6C655D7D"
 
 # A list of the distributors we should talk to.  We will make one request per
 # distributor.  All of them must be running.
@@ -76,7 +75,7 @@ def connect(addr, port, identity):
         digest = d.digest()
 
         if digest != binascii.a2b_hex(identity):
-            raise Error("Certificate for %s:%s was not as expected!" %(addr, port))
+            raise Exception("Certificate for %s:%s was not as expected!" %(addr, port))
 
     return s
 
@@ -99,21 +98,23 @@ def send_get(sock, bitfield, distid=DIST_ID):
     request_id = os.urandom(32)
     distid = binascii.a2b_hex(distid)
 
-    req = (request_id + fmt_u32(0x1000) + fmt_u32(40+len(bitfield)) +
+    req = (request_id + fmt_u32(0x1000) + fmt_u32(40+len(bitfield)) + fmt_u32(0) +
            distid + fmt_u32(N_BUCKETS) + fmt_u32(BLOCK_SIZE) )
     sock.send(req)
     sock.send(bitfield)
 
-    rh = recv_all(sock, 32+8)
-    if len(rh) != 40:
+    rh = recv_all(sock, 44)
+    if len(rh) != 44:
         print "oops, partial read", len(rh)
     id_match = True
     if request_id != rh[:32]:
         print "request id mismatch"
+        print "   ",binascii.b2a_hex(request_id)
+        print "   ",binascii.b2a_hex(rh[:32])
         id_match = False
 
     cmd_code = get_u32(rh[32:36])
-    cmd_len = get_u32(rh[36:])
+    cmd_len = get_u32(rh[36:40])
 
     if cmd_code == 0x2002:
         print "Got an error!"
